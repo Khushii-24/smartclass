@@ -31,6 +31,41 @@ const PRIORITY_CONFIG = {
   low:    { bg: "#dcfce7", color: "#14532d", label: "Low" },
 }
 
+// Cleans up raw JSON / API error blobs into a readable one-liner
+function sanitizeMessage(msg) {
+  if (!msg) return ""
+  // If it looks like a JSON blob, try to extract a human-readable message
+  const trimmed = msg.trim()
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(trimmed)
+      // Gemini / Google API error shape: { error: { message: "..." } }
+      if (parsed?.error?.message) return parsed.error.message
+      if (parsed?.message) return parsed.message
+    } catch (_) {}
+    // Not valid JSON but still looks messy — extract first quoted sentence or truncate
+    const match = trimmed.match(/"message"\s*:\s*"([^"]{10,})"/)
+    if (match) return match[1]
+    // Last resort: truncate to 120 chars
+    return trimmed.length > 120 ? trimmed.slice(0, 117) + "…" : trimmed
+  }
+  // Plain string — return as-is but cap length
+  return trimmed.length > 300 ? trimmed.slice(0, 297) + "…" : trimmed
+}
+
+// Detect quota / rate-limit errors and return a friendly label
+function friendlyErrorLabel(msg) {
+  if (!msg) return null
+  const lower = msg.toLowerCase()
+  if (lower.includes("quota") || lower.includes("rate") || lower.includes("resource_exhausted"))
+    return "API quota exceeded — check your Gemini billing plan."
+  if (lower.includes("unauthorized") || lower.includes("api key") || lower.includes("invalid key"))
+    return "Invalid or missing API key."
+  if (lower.includes("timeout") || lower.includes("timed out"))
+    return "Request timed out. Please retry."
+  return null
+}
+
 export default function NotificationsPage() {
   const [notifications, setNotifications] = useState([])
   const [loading, setLoading] = useState(true)
@@ -476,9 +511,37 @@ export default function NotificationsPage() {
                               {cfg.label}
                             </span>
                           </div>
-                          <p className="text-xs leading-relaxed" style={{ color: n.isRead ? "#9a7a6a" : "#5c3d2e" }}>
-                            {n.message}
-                          </p>
+
+                          {/* Friendly message — hides raw JSON blobs */}
+                          {(() => {
+                            const friendly = friendlyErrorLabel(n.message)
+                            const clean    = sanitizeMessage(n.message)
+                            const isRaw    = n.message?.trim().startsWith("{") || n.message?.trim().startsWith("[")
+                            return (
+                              <>
+                                {friendly ? (
+                                  <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg" style={{ background: "#ffe4e6", border: "0.5px solid #fecdd3" }}>
+                                    <AlertTriangle style={{ width: 12, height: 12, color: "#881337", flexShrink: 0 }} />
+                                    <p className="text-xs font-medium" style={{ color: "#881337" }}>{friendly}</p>
+                                  </div>
+                                ) : (
+                                  <p className="text-xs leading-relaxed" style={{ color: n.isRead ? "#9a7a6a" : "#5c3d2e" }}>
+                                    {clean}
+                                  </p>
+                                )}
+                                {/* Show raw detail in a collapsed code block if it was a JSON blob */}
+                                {isRaw && !friendly && (
+                                  <details className="mt-1">
+                                    <summary className="text-xs cursor-pointer" style={{ color: "#b0917e" }}>Show raw detail</summary>
+                                    <pre className="mt-1 text-xs p-2 rounded-md overflow-auto max-h-32" style={{ background: "#fdfaf8", border: "0.5px solid #eeddd6", color: "#7a5c50", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                                      {n.message}
+                                    </pre>
+                                  </details>
+                                )}
+                              </>
+                            )
+                          })()}
+
                           <p className="text-xs" style={{ color: "#b0917e" }}>
                             {new Date(n.createdAt).toLocaleDateString()} •{" "}
                             {new Date(n.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
